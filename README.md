@@ -208,6 +208,17 @@ cd build
 ./bin/dwarf-cloudsc-fortran 4 16384 32   # The cleaned-up Fortran
 ./bin/dwarf-cloudsc-c 4 16384 32   # The standalone C version
 ```
+### Building on NEC SX-AURORA TSUBAS
+To build on NEC SX-AURORA TSUBAS system, run the following commands
+
+```sh
+./cloudsc-bundle create
+HDF5_ROOT=HDF5-installation-PATH ./cloudsc-bundle build  --arch arch/ecmwf/aurora/nec/4.0.0/  [--single-precision] [--with-mpi] --hdf5 ON --cloudsc-fortran ON --cloudsc-prototype1 OFF --verbose --log DEBUG  
+```
+
+Currently available `NEC ompiler/version` selections are:
+
+* `nec/4.0.0 (nfort, ncc, nc++)`
 
 ### Running on ECMWF's Atos BullSequana XH2000
 
