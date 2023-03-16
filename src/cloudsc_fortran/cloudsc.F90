@@ -9,7 +9,7 @@
 
 SUBROUTINE CLOUDSC &
  !---input
- & (KIDIA,    KFDIA,    KLON,    KLEV,&
+ & (KIDIA,    KFDIA,    KLON,    KLEV, &
  & PTSPHY,&
  & PT, PQ, tendency_cml,tendency_tmp,tendency_loc, &
  & PVFA, PVFL, PVFI, PDYNA, PDYNL, PDYNI, &
@@ -32,8 +32,8 @@ SUBROUTINE CLOUDSC &
  & PFSQLF,   PFSQIF ,  PFCQNNG,  PFCQLNG,&
  & PFSQRF,   PFSQSF ,  PFCQRNG,  PFCQSNG,&
  & PFSQLTUR, PFSQITUR , &
- & PFPLSL,   PFPLSN,   PFHPSL,   PFHPSN,&
- & KFLDX)
+ & PFPLSL,   PFPLSN,   PFHPSL,   PFHPSN, KFLDX, &
+ & YDCST, YDTHF, YDECLDP)
 
 !===============================================================================
 !**** *CLOUDSC* -  ROUTINE FOR PARAMATERIZATION OF CLOUD PROCESSES
@@ -130,13 +130,12 @@ SUBROUTINE CLOUDSC &
 
 USE PARKIND1 , ONLY : JPIM, JPRB
 !USE YOMHOOK  , ONLY : LHOOK, DR_HOOK
-USE YOMCST   , ONLY : RG, RD, RCPD, RETV, RLVTT, RLSTT, RLMLT, RTT, RV  
-USE YOETHF   , ONLY : R2ES, R3LES, R3IES, R4LES, R4IES, R5LES, R5IES, &
- & R5ALVCP, R5ALSCP, RALVDCP, RALSDCP, RALFDCP, RTWAT, RTICE, RTICECU, &
- & RTWAT_RTICE_R, RTWAT_RTICECU_R, RKOOP1, RKOOP2
-USE YOECLDP  , ONLY : YRECLDP, NCLDQV, NCLDQL, NCLDQR, NCLDQI, NCLDQS, NCLV
 USE YOMPHYDER ,ONLY : STATE_TYPE
-
+USE YOECLDP  , ONLY : NCLDQV, NCLDQL, NCLDQR, NCLDQI, NCLDQS, NCLV
+USE YOECLDP  , ONLY : TECLDP
+USE YOEPHLI  , ONLY : TEPHLI
+USE YOMCST   , ONLY : TOMCST
+USE YOETHF   , ONLY : TOETHF
 IMPLICIT NONE
 
 !-------------------------------------------------------------------------------
@@ -295,11 +294,12 @@ REAL(KIND=JPRB) :: ZE
 REAL(KIND=JPRB) :: ZEPSEC
 REAL(KIND=JPRB) :: ZFAC, ZFACI, ZFACW
 REAL(KIND=JPRB) :: ZGDCP
-REAL(KIND=JPRB) :: ZINEW
+REAL(KIND=JPRB) :: ZINEW,  ZINEWlist(KLON)
 REAL(KIND=JPRB) :: ZLCRIT
 REAL(KIND=JPRB) :: ZMFDN
 REAL(KIND=JPRB) :: ZPRECIP
 REAL(KIND=JPRB) :: ZQE
+REAL(KIND=JPRB) :: ZQElist(KLON), ZZRHlist(KLON)
 REAL(KIND=JPRB) :: ZQSAT, ZQTMST, ZRDCP
 REAL(KIND=JPRB) :: ZRHC, ZSIG, ZSIGK
 REAL(KIND=JPRB) :: ZWTOT
@@ -331,7 +331,7 @@ LOGICAL :: LLFALL(NCLV)      ! marks falling species
                              ! LLFALL=0, cloud cover must > 0 for zqx > 0
                              ! LLFALL=1, no cloud needed, zqx can evaporate
 
-LOGICAL            :: LLINDEX1(KLON,NCLV)      ! index variable
+INTEGER           :: LLINDEX1(KLON,NCLV)      ! index variable
 LOGICAL            :: LLINDEX3(KLON,NCLV,NCLV) ! index variable
 REAL(KIND=JPRB)    :: ZMAX
 REAL(KIND=JPRB)    :: ZRAT 
@@ -476,7 +476,7 @@ REAL(KIND=JPRB) :: Z_TMP7(KFDIA-KIDIA+1)
 REAL(KIND=JPRB) :: Z_TMPK(KFDIA-KIDIA+1,KLEV)
 !REAL(KIND=JPRB) :: ZCON1,ZCON2
 REAL(KIND=JPRB) :: ZHOOK_HANDLE
-REAL(KIND=JPRB) :: ZTMPL,ZTMPI,ZTMPA
+REAL(KIND=JPRB) :: ZTMPL,ZTMPI,ZTMPA, ZTMPAlist(KLON)
 
 REAL(KIND=JPRB) :: ZMM,ZRR
 REAL(KIND=JPRB) :: ZRG(KLON)
@@ -489,63 +489,74 @@ REAL(KIND=JPRB) :: ZZSUM, ZZRATIO
 REAL(KIND=JPRB) :: ZEPSILON
 
 REAL(KIND=JPRB) :: ZCOND1, ZQP
-
+integer :: idx
+integer :: midx, nidx, sidx, fidx, kidx
+integer :: midxlist(KFDIA), nidxlist(KFDIA), sidxlist(KFDIA), fidxlist(KFDIA)
+integer :: kidxlist(KFDIA)
+TYPE(TOMCST)      ,INTENT(IN) :: YDCST
+TYPE(TOETHF)      ,INTENT(IN) :: YDTHF
+TYPE(TECLDP)      ,INTENT(IN) :: YDECLDP
 
 #include "abor1.intfb.h"
 
 !DIR$ VFUNCTION EXPHF
-#include "fcttre.func.h"
-#include "fccld.func.h"
+#include "fcttre.ycst.h"
+#include "fccld.ydthf.h"
 
 !===============================================================================
 !IF (LHOOK) CALL DR_HOOK('CLOUDSC',0,ZHOOK_HANDLE)
-ASSOCIATE(LAERICEAUTO=>YRECLDP%LAERICEAUTO, LAERICESED=>YRECLDP%LAERICESED, &
- & LAERLIQAUTOLSP=>YRECLDP%LAERLIQAUTOLSP, LAERLIQCOLL=>YRECLDP%LAERLIQCOLL, &
- & LCLDBUDGET=>YRECLDP%LCLDBUDGET, NCLDTOP=>YRECLDP%NCLDTOP, &
- & NSSOPT=>YRECLDP%NSSOPT, RAMID=>YRECLDP%RAMID, RAMIN=>YRECLDP%RAMIN, &
- & RCCN=>YRECLDP%RCCN, RCLCRIT_LAND=>YRECLDP%RCLCRIT_LAND, &
- & RCLCRIT_SEA=>YRECLDP%RCLCRIT_SEA, RCLDIFF=>YRECLDP%RCLDIFF, &
- & RCLDIFF_CONVI=>YRECLDP%RCLDIFF_CONVI, RCLDTOPCF=>YRECLDP%RCLDTOPCF, &
- & RCL_APB1=>YRECLDP%RCL_APB1, RCL_APB2=>YRECLDP%RCL_APB2, &
- & RCL_APB3=>YRECLDP%RCL_APB3, RCL_CDENOM1=>YRECLDP%RCL_CDENOM1, &
- & RCL_CDENOM2=>YRECLDP%RCL_CDENOM2, RCL_CDENOM3=>YRECLDP%RCL_CDENOM3, &
- & RCL_CONST1I=>YRECLDP%RCL_CONST1I, RCL_CONST1R=>YRECLDP%RCL_CONST1R, &
- & RCL_CONST1S=>YRECLDP%RCL_CONST1S, RCL_CONST2I=>YRECLDP%RCL_CONST2I, &
- & RCL_CONST2R=>YRECLDP%RCL_CONST2R, RCL_CONST2S=>YRECLDP%RCL_CONST2S, &
- & RCL_CONST3I=>YRECLDP%RCL_CONST3I, RCL_CONST3R=>YRECLDP%RCL_CONST3R, &
- & RCL_CONST3S=>YRECLDP%RCL_CONST3S, RCL_CONST4I=>YRECLDP%RCL_CONST4I, &
- & RCL_CONST4R=>YRECLDP%RCL_CONST4R, RCL_CONST4S=>YRECLDP%RCL_CONST4S, &
- & RCL_CONST5I=>YRECLDP%RCL_CONST5I, RCL_CONST5R=>YRECLDP%RCL_CONST5R, &
- & RCL_CONST5S=>YRECLDP%RCL_CONST5S, RCL_CONST6I=>YRECLDP%RCL_CONST6I, &
- & RCL_CONST6R=>YRECLDP%RCL_CONST6R, RCL_CONST6S=>YRECLDP%RCL_CONST6S, &
- & RCL_CONST7S=>YRECLDP%RCL_CONST7S, RCL_CONST8S=>YRECLDP%RCL_CONST8S, &
- & RCL_FAC1=>YRECLDP%RCL_FAC1, RCL_FAC2=>YRECLDP%RCL_FAC2, &
- & RCL_FZRAB=>YRECLDP%RCL_FZRAB, RCL_KA273=>YRECLDP%RCL_KA273, &
- & RCL_KKAAC=>YRECLDP%RCL_KKAAC, RCL_KKAAU=>YRECLDP%RCL_KKAAU, &
- & RCL_KKBAC=>YRECLDP%RCL_KKBAC, RCL_KKBAUN=>YRECLDP%RCL_KKBAUN, &
- & RCL_KKBAUQ=>YRECLDP%RCL_KKBAUQ, &
- & RCL_KK_CLOUD_NUM_LAND=>YRECLDP%RCL_KK_CLOUD_NUM_LAND, &
- & RCL_KK_CLOUD_NUM_SEA=>YRECLDP%RCL_KK_CLOUD_NUM_SEA, RCL_X3I=>YRECLDP%RCL_X3I, &
- & RCOVPMIN=>YRECLDP%RCOVPMIN, RDENSREF=>YRECLDP%RDENSREF, &
- & RDEPLIQREFDEPTH=>YRECLDP%RDEPLIQREFDEPTH, &
- & RDEPLIQREFRATE=>YRECLDP%RDEPLIQREFRATE, RICEHI1=>YRECLDP%RICEHI1, &
- & RICEHI2=>YRECLDP%RICEHI2, RICEINIT=>YRECLDP%RICEINIT, RKCONV=>YRECLDP%RKCONV, &
- & RKOOPTAU=>YRECLDP%RKOOPTAU, RLCRITSNOW=>YRECLDP%RLCRITSNOW, &
- & RLMIN=>YRECLDP%RLMIN, RNICE=>YRECLDP%RNICE, RPECONS=>YRECLDP%RPECONS, &
- & RPRC1=>YRECLDP%RPRC1, RPRECRHMAX=>YRECLDP%RPRECRHMAX, &
- & RSNOWLIN1=>YRECLDP%RSNOWLIN1, RSNOWLIN2=>YRECLDP%RSNOWLIN2, &
- & RTAUMEL=>YRECLDP%RTAUMEL, RTHOMO=>YRECLDP%RTHOMO, RVICE=>YRECLDP%RVICE, &
- & RVRAIN=>YRECLDP%RVRAIN, RVRFACTOR=>YRECLDP%RVRFACTOR, &
- & RVSNOW=>YRECLDP%RVSNOW)
+ASSOCIATE( LAERICEAUTO=>YDECLDP%LAERICEAUTO, LAERICESED=>YDECLDP%LAERICESED, &
+ & LAERLIQAUTOLSP=>YDECLDP%LAERLIQAUTOLSP, LAERLIQCOLL=>YDECLDP%LAERLIQCOLL, &
+ & LCLDBUDGET=>YDECLDP%LCLDBUDGET, NCLDTOP=>YDECLDP%NCLDTOP, &
+ & NSSOPT=>YDECLDP%NSSOPT, RAMID=>YDECLDP%RAMID, RAMIN=>YDECLDP%RAMIN, &
+ & RCCN=>YDECLDP%RCCN, RCLCRIT_LAND=>YDECLDP%RCLCRIT_LAND, &
+ & RCLCRIT_SEA=>YDECLDP%RCLCRIT_SEA, RCLDIFF=>YDECLDP%RCLDIFF, &
+ & RCLDIFF_CONVI=>YDECLDP%RCLDIFF_CONVI, RCLDTOPCF=>YDECLDP%RCLDTOPCF, &
+ & RCL_APB1=>YDECLDP%RCL_APB1, RCL_APB2=>YDECLDP%RCL_APB2, &
+ & RCL_APB3=>YDECLDP%RCL_APB3, RCL_CDENOM1=>YDECLDP%RCL_CDENOM1, &
+ & RCL_CDENOM2=>YDECLDP%RCL_CDENOM2, RCL_CDENOM3=>YDECLDP%RCL_CDENOM3, &
+ & RCL_CONST1I=>YDECLDP%RCL_CONST1I, RCL_CONST1R=>YDECLDP%RCL_CONST1R, &
+ & RCL_CONST1S=>YDECLDP%RCL_CONST1S, RCL_CONST2I=>YDECLDP%RCL_CONST2I, &
+ & RCL_CONST2R=>YDECLDP%RCL_CONST2R, RCL_CONST2S=>YDECLDP%RCL_CONST2S, &
+ & RCL_CONST3I=>YDECLDP%RCL_CONST3I, RCL_CONST3R=>YDECLDP%RCL_CONST3R, &
+ & RCL_CONST3S=>YDECLDP%RCL_CONST3S, RCL_CONST4I=>YDECLDP%RCL_CONST4I, &
+ & RCL_CONST4R=>YDECLDP%RCL_CONST4R, RCL_CONST4S=>YDECLDP%RCL_CONST4S, &
+ & RCL_CONST5I=>YDECLDP%RCL_CONST5I, RCL_CONST5R=>YDECLDP%RCL_CONST5R, &
+ & RCL_CONST5S=>YDECLDP%RCL_CONST5S, RCL_CONST6I=>YDECLDP%RCL_CONST6I, &
+ & RCL_CONST6R=>YDECLDP%RCL_CONST6R, RCL_CONST6S=>YDECLDP%RCL_CONST6S, &
+ & RCL_CONST7S=>YDECLDP%RCL_CONST7S, RCL_CONST8S=>YDECLDP%RCL_CONST8S, &
+ & RCL_FAC1=>YDECLDP%RCL_FAC1, RCL_FAC2=>YDECLDP%RCL_FAC2, &
+ & RCL_FZRAB=>YDECLDP%RCL_FZRAB, RCL_KA273=>YDECLDP%RCL_KA273, &
+ & RCL_KKAAC=>YDECLDP%RCL_KKAAC, RCL_KKAAU=>YDECLDP%RCL_KKAAU, &
+ & RCL_KKBAC=>YDECLDP%RCL_KKBAC, RCL_KKBAUN=>YDECLDP%RCL_KKBAUN, &
+ & RCL_KKBAUQ=>YDECLDP%RCL_KKBAUQ, &
+ & RCL_KK_CLOUD_NUM_LAND=>YDECLDP%RCL_KK_CLOUD_NUM_LAND, &
+ & RCL_KK_CLOUD_NUM_SEA=>YDECLDP%RCL_KK_CLOUD_NUM_SEA, RCL_X3I=>YDECLDP%RCL_X3I, &
+ & RCOVPMIN=>YDECLDP%RCOVPMIN, RDENSREF=>YDECLDP%RDENSREF, &
+ & RDEPLIQREFDEPTH=>YDECLDP%RDEPLIQREFDEPTH, &
+ & RDEPLIQREFRATE=>YDECLDP%RDEPLIQREFRATE, RICEHI1=>YDECLDP%RICEHI1, &
+ & RICEHI2=>YDECLDP%RICEHI2, RICEINIT=>YDECLDP%RICEINIT, RKCONV=>YDECLDP%RKCONV, &
+ & RKOOPTAU=>YDECLDP%RKOOPTAU, RLCRITSNOW=>YDECLDP%RLCRITSNOW, &
+ & RLMIN=>YDECLDP%RLMIN, RNICE=>YDECLDP%RNICE, RPECONS=>YDECLDP%RPECONS, &
+ & RPRC1=>YDECLDP%RPRC1, RPRECRHMAX=>YDECLDP%RPRECRHMAX, &
+ & RSNOWLIN1=>YDECLDP%RSNOWLIN1, RSNOWLIN2=>YDECLDP%RSNOWLIN2, &
+ & RTAUMEL=>YDECLDP%RTAUMEL, RTHOMO=>YDECLDP%RTHOMO, RVICE=>YDECLDP%RVICE, &
+ & RVRAIN=>YDECLDP%RVRAIN, RVRFACTOR=>YDECLDP%RVRFACTOR, &
+ & RVSNOW=>YDECLDP%RVSNOW, RG=>YDCST%RG, RD=>YDCST%RD, &
+ & RCPD=>YDCST%RCPD, RETV=>YDCST%RETV, RLVTT=>YDCST%RLVTT, &
+ & RLSTT=>YDCST%RLSTT, RLMLT=>YDCST%RLMLT, RTT=>YDCST%RTT, &
+ & RV=>YDCST%RV, R4LES=>YDTHF%R4LES, R4IES=>YDTHF%R4IES, &
+ & R5LES=>YDTHF%R5LES, R5IES=>YDTHF%R5IES, RALVDCP=>YDTHF%RALVDCP, &
+ & RALSDCP=>YDTHF%RALSDCP, RALFDCP=>YDTHF%RALFDCP )
 
 !===============================================================================
 !  0.0     Beginning of timestep book-keeping
 !----------------------------------------------------------------------
 
-
 !######################################################################
 !             0.  *** SET UP CONSTANTS ***
 !######################################################################
+
 
 ZEPSILON=100._JPRB*EPSILON(ZEPSILON)
 
@@ -614,6 +625,7 @@ IMELT(NCLDQS)=NCLDQR
 ! -----------------------------------------------
 ! INITIALIZATION OF OUTPUT TENDENCIES
 ! -----------------------------------------------
+!call ftrace_region_begin("line629")
 DO JK=1,KLEV
   DO JL=KIDIA,KFDIA
     tendency_loc%T(JL,JK)=0.0_JPRB
@@ -628,7 +640,7 @@ DO JM=1,NCLV-1
     ENDDO
   ENDDO
 ENDDO
-
+!call ftrace_region_end("line629")
 ! -------------------------
 ! set up fall speeds in m/s
 ! -------------------------
@@ -654,6 +666,7 @@ LLFALL(NCLDQI)=.FALSE.
 ! ----------------------
 ! non CLV initialization 
 ! ----------------------
+!call ftrace_region_begin("line667")
 DO JK=1,KLEV
   DO JL=KIDIA,KFDIA
     ZTP1(JL,JK)        = PT(JL,JK)+PTSPHY*tendency_tmp%T(JL,JK)
@@ -663,31 +676,34 @@ DO JK=1,KLEV
     ZAORIG(JL,JK)      = PA(JL,JK)+PTSPHY*tendency_tmp%a(JL,JK)
   ENDDO
 ENDDO
-
+!call ftrace_region_end("line667")
 ! -------------------------------------
 ! initialization for CLV family
 ! -------------------------------------
+!call ftrace_region_begin("line681")
 DO JM=1,NCLV-1
   DO JK=1,KLEV
     DO JL=KIDIA,KFDIA
       ZQX(JL,JK,JM)  = PCLV(JL,JK,JM)+PTSPHY*tendency_tmp%cld(JL,JK,JM)
-      ZQX0(JL,JK,JM) = PCLV(JL,JK,JM)+PTSPHY*tendency_tmp%cld(JL,JK,JM)
+      ZQX0(JL,JK,JM) = ZQX(JL,JK,JM) !PCLV(JL,JK,JM)+PTSPHY*tendency_tmp%cld(JL,JK,JM)
     ENDDO
   ENDDO
 ENDDO
-
+!call ftrace_region_end("line681")
 !-------------
 ! zero arrays
 !-------------
+!call ftrace_region_begin("Expand_loop")
 ZPFPLSX(:,:,:) = 0.0_JPRB ! precip fluxes
 ZQXN2D(:,:,:)  = 0.0_JPRB ! end of timestep values in 2D
 ZLNEG(:,:,:)   = 0.0_JPRB ! negative input check
 PRAINFRAC_TOPRFZ(:) =0.0_JPRB ! rain fraction at top of refreezing layer
 LLRAINLIQ(:) = .TRUE.  ! Assume all raindrops are liquid initially
-
+!call ftrace_region_end("Expand_loop")
 ! ----------------------------------------------------
 ! Tidy up very small cloud cover or total cloud water
 ! ----------------------------------------------------
+!call ftrace_region_begin("line704")
 DO JK=1,KLEV
   DO JL=KIDIA,KFDIA
     IF (ZQX(JL,JK,NCLDQL)+ZQX(JL,JK,NCLDQI)<RLMIN.OR.ZA(JL,JK)<RAMIN) THEN
@@ -714,10 +730,11 @@ DO JK=1,KLEV
     ENDIF
   ENDDO
 ENDDO
-
+!call ftrace_region_end("line704")
 ! ---------------------------------
 ! Tidy up small CLV variables
 ! ---------------------------------
+!call ftrace_region_begin("line735")
 !DIR$ IVDEP
 DO JM=1,NCLV-1
 !DIR$ IVDEP
@@ -736,11 +753,12 @@ DO JM=1,NCLV-1
     ENDDO
   ENDDO
 ENDDO
-
+!call ftrace_region_end("line735")
 
 ! ------------------------------
 ! Define saturation values
 ! ------------------------------
+!call ftrace_region_begin("line759")
 DO JK=1,KLEV
   DO JL=KIDIA,KFDIA
     !----------------------------------------
@@ -777,7 +795,8 @@ DO JK=1,KLEV
   ENDDO
 
 ENDDO
-
+!call ftrace_region_end("line759")
+!call ftrace_region_begin("line797")
 DO JK=1,KLEV
   DO JL=KIDIA,KFDIA
 
@@ -801,7 +820,7 @@ DO JK=1,KLEV
 
   ENDDO
 ENDDO
-
+!call ftrace_region_end("line797")
 !######################################################################
 !        2.       *** CONSTANTS AND PARAMETERS ***
 !######################################################################
@@ -813,6 +832,7 @@ ENDDO
 !---------------------------------
 ! Find tropopause level (ZTRPAUS)
 !---------------------------------
+!call ftrace_region_begin("line832")
 DO JL=KIDIA,KFDIA
   ZTRPAUS(JL)=0.1_JPRB
   ZPAPHD(JL)=1.0_JPRB/PAPH(JL,KLEV+1)
@@ -825,18 +845,18 @@ DO JK=1,KLEV-1
     ENDIF
   ENDDO
 ENDDO
-
+!call ftrace_region_end("line832")
 !-----------------------------
 ! Reset single level variables
 !-----------------------------
-
+!call ftrace_region_begin("expand2")
 ZANEWM1(:)  = 0.0_JPRB
 ZDA(:)      = 0.0_JPRB
 ZCOVPCLR(:) = 0.0_JPRB
 ZCOVPMAX(:) = 0.0_JPRB  
 ZCOVPTOT(:) = 0.0_JPRB
 ZCLDTOPDIST(:) = 0.0_JPRB
-
+!call ftrace_region_end("expand2")
 !######################################################################
 !           3.       *** PHYSICS ***
 !######################################################################
@@ -846,6 +866,8 @@ ZCLDTOPDIST(:) = 0.0_JPRB
 !                       START OF VERTICAL LOOP
 !----------------------------------------------------------------------
 
+!call ftrace_region_begin("line867")
+!"*******************    ",NCLDTOP = 15"   ", KLEV = 137 "     ", NCLV = 5 "    " ,KLON = NPROMA "    ", KFDIA = NPROMA
 DO JK=NCLDTOP,KLEV
 
 !----------------------------------------------------------------------
@@ -876,8 +898,7 @@ DO JK=NCLDTOP,KLEV
 
   ! Required for first guess call
   ZLCOND1(:) = 0.0_JPRB
-  ZLCOND2(:) = 0.0_JPRB
-  ZSUPSAT(:) = 0.0_JPRB
+
   ZLEVAPL(:) = 0.0_JPRB
   ZLEVAPI(:) = 0.0_JPRB
 
@@ -902,8 +923,10 @@ DO JK=NCLDTOP,KLEV
   ZCONVSINK(:,:) = 0.0_JPRB
   ZPSUPSATSRCE(:,:) = 0.0_JPRB
   ZRATIO(:,:)    = 0.0_JPRB
-  ZICETOT(:)     = 0.0_JPRB                            
-  
+  ZICETOT(:)     = 0.0_JPRB  
+ 
+
+ ! call ftrace_region_begin("line926") 
   DO JL=KIDIA,KFDIA
 
     !-------------------------
@@ -932,7 +955,7 @@ DO JK=NCLDTOP,KLEV
 
     ! ice
     ZFACI         = R5IES/((ZTP1(JL,JK)-R4IES)**2)
-    ZCOR          = 1.0_JPRB/(1.0_JPRB-RETV*ZFOEEW(JL,JK))
+    ZCOR         = 1.0_JPRB/(1.0_JPRB-RETV*ZFOEEW(JL,JK))
     ZDQSICEDT(JL) = ZFACI*ZCOR*ZQSICE(JL,JK)
     ZCORQSICE(JL) = 1.0_JPRB+RALSDCP*ZDQSICEDT(JL)
 
@@ -952,16 +975,17 @@ DO JK=NCLDTOP,KLEV
     !--------------------------------
     ! in-cloud consensate amount
     !--------------------------------
-    ZTMPA = 1.0_JPRB/MAX(ZA(JL,JK),ZEPSEC)
-    ZLIQCLD(JL) = ZQX(JL,JK,NCLDQL)*ZTMPA
-    ZICECLD(JL) = ZQX(JL,JK,NCLDQI)*ZTMPA
+    ZTMPAlist(JL) = 1.0_JPRB/MAX(ZA(JL,JK),ZEPSEC)
+    ZLIQCLD(JL) = ZQX(JL,JK,NCLDQL)*ZTMPAlist(JL)
+    ZICECLD(JL) = ZQX(JL,JK,NCLDQI)*ZTMPAlist(JL)
     ZLICLD(JL)  = ZLIQCLD(JL)+ZICECLD(JL)
 
   ENDDO
-  
+  !call ftrace_region_end("line926")
   !------------------------------------------------
   ! Evaporate very small amounts of liquid and ice
   !------------------------------------------------
+  !call ftrace_region_begin("line985")
   DO JL=KIDIA,KFDIA
 
     IF (ZQX(JL,JK,NCLDQL) < RLMIN) THEN
@@ -975,7 +999,7 @@ DO JK=NCLDTOP,KLEV
     ENDIF
 
   ENDDO
-  
+  !call ftrace_region_end("line985")
   !---------------------------------------------------------------------
   !  3.1  ICE SUPERSATURATION ADJUSTMENT
   !---------------------------------------------------------------------
@@ -988,7 +1012,7 @@ DO JK=NCLDTOP,KLEV
   ! to a maximum set by the liquid water saturation mixing ratio
   ! important for temperatures near to but below 0C
   !----------------------------------------------------------------------- 
-
+  !call ftrace_region_begin("line1012")
 !DIR$ NOFUSION
   DO JL=KIDIA,KFDIA
 
@@ -998,6 +1022,8 @@ DO JK=NCLDTOP,KLEV
     ! Needs to be set for all temperatures
     ZFOKOOP(JL)=FOKOOP(ZTP1(JL,JK))
   ENDDO
+  !call ftrace_region_end("line1012")
+  !call ftrace_region_begin("line1023")
   DO JL=KIDIA,KFDIA
 
     IF (ZTP1(JL,JK)>=RTT .OR. NSSOPT==0) THEN
@@ -1081,7 +1107,7 @@ DO JK=NCLDTOP,KLEV
       ENDIF
 
   ENDDO ! on JL
-
+  !call ftrace_region_end("line1023")
   !---------------------------------------------------------------------
   !  3.2  DETRAINMENT FROM CONVECTION
   !---------------------------------------------------------------------
@@ -1093,6 +1119,7 @@ DO JK=NCLDTOP,KLEV
   !    term, since is now written in mass-flux terms  
   ! [#Note: Should use ZFOEALFACU used in convection rather than ZFOEALFA]
   !---------------------------------------------------------------------
+  !call ftrace_region_begin("line 1118")
   IF (JK < KLEV .AND. JK>=NCLDTOP) THEN
 
     DO JL=KIDIA,KFDIA
@@ -1120,7 +1147,7 @@ DO JK=NCLDTOP,KLEV
     ENDDO
 
   ENDIF ! JK<KLEV
-
+  !call ftrace_region_end("line 1118")
   !---------------------------------------------------------------------
   !  3.3  SUBSIDENCE COMPENSATING CONVECTIVE UPDRAUGHTS
   !---------------------------------------------------------------------
@@ -1135,28 +1162,12 @@ DO JK=NCLDTOP,KLEV
   !               and 
   ! Evaporation of cloud within the layer
   !-----------------------------------------------
+  !call ftrace_region_begin("line 1161")
   IF (JK > NCLDTOP) THEN
 
     DO JL=KIDIA,KFDIA
       ZMF(JL)=MAX(0.0_JPRB,(PMFU(JL,JK)+PMFD(JL,JK))*ZDTGDP(JL))
       ZACUST(JL)=ZMF(JL)*ZANEWM1(JL)
-    ENDDO
-
-    DO JM=1,NCLV
-      IF (.NOT.LLFALL(JM).AND.IPHASE(JM)>0) THEN 
-        DO JL=KIDIA,KFDIA
-          ZLCUST(JL,JM)=ZMF(JL)*ZQXNM1(JL,JM)
-          ! record total flux for enthalpy budget:
-          ZCONVSRCE(JL,JM)=ZCONVSRCE(JL,JM)+ZLCUST(JL,JM)
-        ENDDO
-      ENDIF
-    ENDDO
-
-    ! Now have to work out how much liquid evaporates at arrival point 
-    ! since there is no prognostic memory for in-cloud humidity, i.e. 
-    ! we always assume cloud is saturated. 
-
-    DO JL=KIDIA,KFDIA
       ZDTDP=ZRDCP*0.5_JPRB*(ZTP1(JL,JK-1)+ZTP1(JL,JK))/PAPH(JL,JK)
       ZDTFORC = ZDTDP*(PAP(JL,JK)-PAP(JL,JK-1))
       ![#Note: Diagnostic mixed phase should be replaced below]
@@ -1166,6 +1177,9 @@ DO JK=NCLDTOP,KLEV
     DO JM=1,NCLV
       IF (.NOT.LLFALL(JM).AND.IPHASE(JM)>0) THEN 
         DO JL=KIDIA,KFDIA
+          ZLCUST(JL,JM)=ZMF(JL)*ZQXNM1(JL,JM)
+          ! record total flux for enthalpy budget:
+          ZCONVSRCE(JL,JM)=ZCONVSRCE(JL,JM)+ZLCUST(JL,JM)
           ZLFINAL=MAX(0.0_JPRB,ZLCUST(JL,JM)-ZDQS(JL)) !lim to zero
           ! no supersaturation allowed incloud ---V
           ZEVAP=MIN((ZLCUST(JL,JM)-ZLFINAL),ZEVAPLIMMIX(JL)) 
@@ -1187,12 +1201,12 @@ DO JK=NCLDTOP,KLEV
     ENDDO
 
   ENDIF ! on  JK>NCLDTOP
-
+  !call ftrace_region_end("line 1161")
   !---------------------------------------------------------------------
   ! Subsidence sink of cloud to the layer below 
   ! (Implicit - re. CFL limit on convective mass flux)
   !---------------------------------------------------------------------
-
+  !call ftrace_region_begin("line 1219")
   DO JL=KIDIA,KFDIA
 
     IF(JK<KLEV) THEN
@@ -1210,7 +1224,7 @@ DO JK=NCLDTOP,KLEV
     ENDIF
 
   ENDDO
-
+  !call ftrace_region_end("line 1219")
   !----------------------------------------------------------------------
   ! 3.4  EROSION OF CLOUDS BY TURBULENT MIXING
   !----------------------------------------------------------------------
@@ -1222,6 +1236,7 @@ DO JK=NCLDTOP,KLEV
   ! ------------------------------
   ! Define turbulent erosion rate
   ! ------------------------------
+  !call ftrace_region_begin("line 1249")
   DO JL=KIDIA,KFDIA
     ZLDIFDT(JL)=RCLDIFF*PTSPHY !original version
     !Increase by factor of 5 for convective points
@@ -1254,7 +1269,7 @@ DO JK=NCLDTOP,KLEV
 
     ENDIF
   ENDDO
-
+  !call ftrace_region_end("line 1249")
   !----------------------------------------------------------------------
   ! 3.4  CONDENSATION/EVAPORATION DUE TO DQSAT/DT
   !----------------------------------------------------------------------
@@ -1272,7 +1287,7 @@ DO JK=NCLDTOP,KLEV
   !  Thus for the initial implementation the diagnostic mixed phase is 
   !  retained for the moment, and the level of approximation noted.  
   !----------------------------------------------------------------------
-
+  !call ftrace_region_begin("line 1300")
   DO JL=KIDIA,KFDIA
     ZDTDP   = ZRDCP*ZTP1(JL,JK)/PAP(JL,JK)
     ZDPMXDT = ZDP(JL)*ZQTMST
@@ -1293,7 +1308,8 @@ DO JK=NCLDTOP,KLEV
     ZTP1(JL,JK) = MAX(ZTP1(JL,JK),160.0_JPRB)
     LLFLAG(JL)  = .TRUE.
   ENDDO
-
+  !call ftrace_region_end("line 1300")
+  !call ftrace_region_begin("line 1322")
   ! Formerly a call to CUADJTQ(..., ICALL=5)
   DO JL=KIDIA,KFDIA
      ZQP   = 1.0_JPRB/PAP(JL,JK)
@@ -1318,13 +1334,13 @@ DO JK=NCLDTOP,KLEV
     ZQSMIX(JL,JK) = ZQOLD(JL)
     ZTP1(JL,JK)   = ZTOLD(JL)
   ENDDO
-
+  !call ftrace_region_end("line 1322")
   !----------------------------------------------------------------------
   ! 3.4a  ZDQS(JL) > 0:  EVAPORATION OF CLOUDS
   ! ----------------------------------------------------------------------
   ! Erosion term is LINEAR in L
   ! Changed to be uniform distribution in cloud region
-
+  !call ftrace_region_begin("line 1353")
   DO JL=KIDIA,KFDIA
 
     ! Previous function based on DELTA DISTRIBUTION in cloud:
@@ -1349,14 +1365,21 @@ DO JK=NCLDTOP,KLEV
    ENDIF
 
   ENDDO
-
+  !call ftrace_region_end("line 1353")
   !----------------------------------------------------------------------
   ! 3.4b ZDQS(JL) < 0: FORMATION OF CLOUDS
   !----------------------------------------------------------------------
   ! (1) Increase of cloud water in existing clouds
+  !call ftrace_region_begin("line 1383")
+  fidx = 0
   DO JL=KIDIA,KFDIA
     IF(ZA(JL,JK) > ZEPSEC.AND.ZDQS(JL) <= -RLMIN) THEN
-
+      fidx = fidx + 1
+      fidxlist(fidx) = JL
+    ENDIF
+ ENDDO
+ DO idx=1, fidx
+      JL = fidxlist(idx)
       ZLCOND1(JL)=MAX(-ZDQS(JL),0.0_JPRB) !new limiter
 
 !old limiter (significantly improves upper tropospheric humidity rms)
@@ -1387,22 +1410,27 @@ DO JK=NCLDTOP,KLEV
         ZSOLQA(JL,NCLDQV,NCLDQI)=ZSOLQA(JL,NCLDQV,NCLDQI)-ZLCOND1(JL)
         ZQXFG(JL,NCLDQI)=ZQXFG(JL,NCLDQI)+ZLCOND1(JL)
       ENDIF
-    ENDIF
   ENDDO
-
+  !call ftrace_region_end("line 1383")
   ! (2) Generation of new clouds (da/dt>0)
-  
+  sidx = 0
+ ! call ftrace_region_begin("line 1421")
   DO JL=KIDIA,KFDIA
 
     IF(ZDQS(JL) <= -RLMIN .AND. ZA(JL,JK)<1.0_JPRB-ZEPSEC) THEN
-
+       sidx = sidx + 1
+       sidxlist(sidx) = JL
+    ENDIF
+  ENDDO
+  DO idx=1,sidx
+    JL = sidxlist(idx)
       !---------------------------
       ! Critical relative humidity
       !---------------------------
       ZRHC=RAMID
       ZSIGK=PAP(JL,JK)/PAPH(JL,KLEV+1)
       ! Increase RHcrit to 1.0 towards the surface (eta>0.8)
-      IF(ZSIGK > 0.8_JPRB) THEN
+      IF(ZSIGK> 0.8_JPRB) THEN
         ZRHC=RAMID+(1.0_JPRB-RAMID)*((ZSIGK-0.8_JPRB)/0.2_JPRB)**2
       ENDIF
 
@@ -1416,23 +1444,20 @@ DO JK=NCLDTOP,KLEV
       !---------------------------
       ! Supersaturation options
       !---------------------------      
-      IF (NSSOPT==0) THEN 
-        ! No scheme
+      !!!IF (NSSOPT==0) THEN 
+        !!!ZQE=(ZQX(JL,JK,NCLDQV)-ZA(JL,JK)*ZQSICE(JL,JK))/&
+        !!!& MAX(ZEPSEC,1.0_JPRB-ZA(JL,JK))  
+       !!! ZQE=MAX(0.0_JPRB,ZQE)
+      !!!ELSEIF (NSSOPT==1) THEN 
+        !print *, "! Tompkins "
         ZQE=(ZQX(JL,JK,NCLDQV)-ZA(JL,JK)*ZQSICE(JL,JK))/&
             & MAX(ZEPSEC,1.0_JPRB-ZA(JL,JK))  
         ZQE=MAX(0.0_JPRB,ZQE)
-      ELSEIF (NSSOPT==1) THEN 
-        ! Tompkins 
-        ZQE=(ZQX(JL,JK,NCLDQV)-ZA(JL,JK)*ZQSICE(JL,JK))/&
-            & MAX(ZEPSEC,1.0_JPRB-ZA(JL,JK))  
-        ZQE=MAX(0.0_JPRB,ZQE)
-      ELSEIF (NSSOPT==2) THEN 
-        ! Lohmann and Karcher
-        ZQE=ZQX(JL,JK,NCLDQV)  
-      ELSEIF (NSSOPT==3) THEN 
-        ! Gierens
-        ZQE=ZQX(JL,JK,NCLDQV)+ZLI(JL,JK)
-      ENDIF
+     !!! ELSEIF (NSSOPT==2) THEN 
+    !!!    ZQE=ZQX(JL,JK,NCLDQV)  
+   !!!   ELSEIF (NSSOPT==3) THEN 
+  !!!      ZQE=ZQX(JL,JK,NCLDQV)+ZLI(JL,JK)
+ !!!     ENDIF
 
       IF (ZTP1(JL,JK)>=RTT .OR. NSSOPT==0) THEN 
         ! No ice supersaturation allowed
@@ -1443,6 +1468,7 @@ DO JK=NCLDTOP,KLEV
       ENDIF
 
       IF(ZQE >= ZRHC*ZQSICE(JL,JK)*ZFAC.AND.ZQE<ZQSICE(JL,JK)*ZFAC) THEN
+
         ! note: not **2 on 1-a term if ZQE is used. 
         ! Added correction term ZFAC to numerator 15/03/2010
         ZACOND=-(1.0_JPRB-ZA(JL,JK))*ZFAC*ZDQS(JL)/&
@@ -1456,11 +1482,12 @@ DO JK=NCLDTOP,KLEV
 
         ! new limiter formulation
         ZZDL=2.0_JPRB*(ZFAC*ZQSICE(JL,JK)-ZQE)/MAX(ZEPSEC,1.0_JPRB-ZA(JL,JK))
+
         ! Added correction term ZFAC 15/03/2010
         IF (ZFAC*ZDQS(JL)<-ZZDL) THEN
           ! ZLCONDLIM=(ZA(JL,JK)-1.0_JPRB)*ZDQS(JL)-ZQSICE(JL,JK)+ZQX(JL,JK,NCLDQV)
           ZLCONDLIM=(ZA(JL,JK)-1.0_JPRB)*ZFAC*ZDQS(JL)- &
-     &               ZFAC*ZQSICE(JL,JK)+ZQX(JL,JK,NCLDQV)
+          &               ZFAC*ZQSICE(JL,JK)+ZQX(JL,JK,NCLDQV)
           ZLCOND2(JL)=MIN(ZLCOND2(JL),ZLCONDLIM)
         ENDIF
         ZLCOND2(JL)=MAX(ZLCOND2(JL),0.0_JPRB)
@@ -1490,9 +1517,9 @@ DO JK=NCLDTOP,KLEV
         ENDIF
 
       ENDIF
-    ENDIF
   ENDDO
-
+ 
+ !call ftrace_region_end("line 1421")
   !----------------------------------------------------------------------
   ! 3.7 Growth of ice by vapour deposition 
   !----------------------------------------------------------------------
@@ -1511,8 +1538,8 @@ DO JK=NCLDTOP,KLEV
   !-  (monodisperse ice particle size distribution)
   !-
   !--------------------------------------------------------
+  !call ftrace_region_begin("line 1541")
   IF (IDEPICE == 1) THEN
-  
   DO JL=KIDIA,KFDIA
 
     !--------------------------------------------------------------
@@ -1533,7 +1560,6 @@ DO JK=NCLDTOP,KLEV
     ! in-cloud water vapour variable
     !--------------------------------------------------------------
     IF (ZTP1(JL,JK)<RTT .AND. ZQXFG(JL,NCLDQL)>RLMIN) THEN  ! T<273K
-
       ZVPICE=FOEEICE(ZTP1(JL,JK))*RV/RD
       ZVPLIQ=ZVPICE*ZFOKOOP(JL) 
       ZICENUCLEI(JL)=1000.0_JPRB*EXP(12.96_JPRB*(ZVPLIQ-ZVPICE)/ZVPLIQ-0.639_JPRB)
@@ -1591,15 +1617,17 @@ DO JK=NCLDTOP,KLEV
       ZSOLQA(JL,NCLDQL,NCLDQI)=ZSOLQA(JL,NCLDQL,NCLDQI)-ZDEPOS
       ZQXFG(JL,NCLDQI)=ZQXFG(JL,NCLDQI)+ZDEPOS
       ZQXFG(JL,NCLDQL)=ZQXFG(JL,NCLDQL)-ZDEPOS
-
-    ENDIF
+   ENDIF
   ENDDO
-  
+    !call ftrace_region_end("line 1541")
+
   !--------------------------------------------------------
   !-
   !- Ice deposition assuming ice PSD
   !-
   !--------------------------------------------------------
+    !call ftrace_region_begin("line 1641")
+
   ELSEIF (IDEPICE == 2) THEN
 
     DO JL=KIDIA,KFDIA
@@ -1622,7 +1650,7 @@ DO JK=NCLDTOP,KLEV
       ! in-cloud water vapour variable
       !--------------------------------------------------------------
       IF (ZTP1(JL,JK)<RTT .AND. ZQXFG(JL,NCLDQL)>RLMIN) THEN  ! T<273K
-      
+        !print *, "*************   check"  
         ZVPICE = FOEEICE(ZTP1(JL,JK))*RV/RD
         ZVPLIQ = ZVPICE*ZFOKOOP(JL) 
         ZICENUCLEI(JL)=1000.0_JPRB*EXP(12.96_JPRB*(ZVPLIQ-ZVPICE)/ZVPLIQ-0.639_JPRB)
@@ -1684,7 +1712,7 @@ DO JK=NCLDTOP,KLEV
     ENDDO
 
   ENDIF ! on IDEPICE
- 
+ ! call ftrace_region_end("line 1541")
   !######################################################################
   !              4  *** PRECIPITATION PROCESSES ***
   !######################################################################
@@ -1692,20 +1720,21 @@ DO JK=NCLDTOP,KLEV
   !----------------------------------
   ! revise in-cloud consensate amount
   !----------------------------------
+ ! call ftrace_region_begin("line 1723")
   DO JL=KIDIA,KFDIA
     ZTMPA = 1.0_JPRB/MAX(ZA(JL,JK),ZEPSEC)
     ZLIQCLD(JL) = ZQXFG(JL,NCLDQL)*ZTMPA
     ZICECLD(JL) = ZQXFG(JL,NCLDQI)*ZTMPA
     ZLICLD(JL)  = ZLIQCLD(JL)+ZICECLD(JL)
   ENDDO
-
+  !call ftrace_region_end("line 1723")
   !----------------------------------------------------------------------
   ! 4.2 SEDIMENTATION/FALLING OF *ALL* MICROPHYSICAL SPECIES
   !     now that rain, snow, graupel species are prognostic
   !     the precipitation flux can be defined directly level by level
   !     There is no vertical memory required from the flux variable
   !----------------------------------------------------------------------
-
+ !!!!call ftrace_region_begin("line 1737")
   DO JM = 1,NCLV
     IF (LLFALL(JM) .OR. JM == NCLDQI) THEN
       DO JL=KIDIA,KFDIA
@@ -1742,7 +1771,7 @@ DO JK=NCLDTOP,KLEV
       ENDDO ! jl  
     ENDIF ! LLFALL
   ENDDO ! jm
-
+!!! call ftrace_region_end("line 1737")
   !---------------------------------------------------------------
   ! Precip cover overlap using MAX-RAN Overlap
   ! Since precipitation is now prognostic we must 
@@ -1759,6 +1788,7 @@ DO JK=NCLDTOP,KLEV
   !   it to zero in a step function once clear-sky precip reaches
   !   zero.
   !---------------------------------------------------------------
+ !! call ftrace_region_begin("line 1791")
   DO JL=KIDIA,KFDIA
     IF (ZQPRETOT(JL)>ZEPSEC) THEN
       ZCOVPTOT(JL) = 1.0_JPRB - ((1.0_JPRB-ZCOVPTOT(JL))*&
@@ -1777,13 +1807,16 @@ DO JK=NCLDTOP,KLEV
       ZCOVPMAX(JL) = 0.0_JPRB ! reset max cover for ZZRH calc 
     ENDIF
   ENDDO
+  !!call ftrace_region_end("line 1791")
   
   !----------------------------------------------------------------------
   ! 4.3a AUTOCONVERSION TO SNOW
   !----------------------------------------------------------------------
+  !!!call ftrace_region_begin("line 1815")
+ IF(ZTP1(JL,JK) <= RTT) THEN
   DO JL=KIDIA,KFDIA
  
-    IF(ZTP1(JL,JK) <= RTT) THEN
+    !!!!IF(ZTP1(JL,JK) <= RTT) THEN
       !-----------------------------------------------------
       !     Snow Autoconversion rate follow Lin et al. 1983
       !-----------------------------------------------------
@@ -1803,8 +1836,10 @@ DO JK=NCLDTOP,KLEV
         ZSOLQB(JL,NCLDQS,NCLDQI)=ZSOLQB(JL,NCLDQS,NCLDQI)+ZSNOWAUT(JL)
 
       ENDIF
-    ENDIF 
+   ENDDO
+ ENDIF
   
+  DO JL=KIDIA,KFDIA
   !----------------------------------------------------------------------
   ! 4.3b AUTOCONVERSION WARM CLOUDS
   !   Collection and accretion will require separate treatment
@@ -1812,14 +1847,12 @@ DO JK=NCLDTOP,KLEV
   !----------------------------------------------------------------------
 
    IF (ZLIQCLD(JL)>ZEPSEC) THEN
-
     !--------------------------------------------------------
     !-
     !- Warm-rain process follow Sundqvist (1989)
     !-
     !--------------------------------------------------------
     IF (IWARMRAIN == 1) THEN
-
       ZZCO=RKCONV*PTSPHY
 
       IF (LAERLIQAUTOLSP) THEN
@@ -1867,6 +1900,7 @@ DO JK=NCLDTOP,KLEV
       ELSE
         ZSOLQB(JL,NCLDQR,NCLDQL)=ZSOLQB(JL,NCLDQR,NCLDQL)+ZRAINAUT(JL)
       ENDIF
+     
 
     !--------------------------------------------------------
     !-
@@ -1874,7 +1908,7 @@ DO JK=NCLDTOP,KLEV
     !-
     !--------------------------------------------------------
     ELSEIF (IWARMRAIN == 2) THEN
-
+   
       IF (PLSM(JL) > 0.5_JPRB) THEN ! land
         ZCONST = RCL_KK_CLOUD_NUM_LAND
         ZLCRIT = RCLCRIT_LAND
@@ -1915,18 +1949,17 @@ DO JK=NCLDTOP,KLEV
         ZSOLQA(JL,NCLDQL,NCLDQR)=ZSOLQA(JL,NCLDQL,NCLDQR)-ZRAINAUT(JL)
         ZSOLQA(JL,NCLDQL,NCLDQR)=ZSOLQA(JL,NCLDQL,NCLDQR)-ZRAINACC(JL)
       ENDIF
-    
-    ENDIF ! on IWARMRAIN
-    
+    ENDIF ! on IWARMRAIN 
    ENDIF ! on ZLIQCLD > ZEPSEC
   ENDDO
 
-
+!!!!call ftrace_region_end("line 1815")
   !----------------------------------------------------------------------
   ! RIMING - COLLECTION OF CLOUD LIQUID DROPS BY SNOW AND ICE
   !      only active if T<0degC and supercooled liquid water is present
   !      AND if not Sundquist autoconversion (as this includes riming)
   !----------------------------------------------------------------------
+ !!! call ftrace_region_begin("line 1962")
   IF (IWARMRAIN > 1) THEN
 
   DO JL=KIDIA,KFDIA
@@ -1973,7 +2006,7 @@ DO JK=NCLDTOP,KLEV
   ENDDO
   
   ENDIF ! on IWARMRAIN > 1
-
+!!!call ftrace_region_end("line 1962")
   
   !----------------------------------------------------------------------
   ! 4.4a  MELTING OF SNOW and ICE
@@ -1982,6 +2015,7 @@ DO JK=NCLDTOP,KLEV
   !       in situ ice and snow: could arise from LS advection or warming
   !       falling ice and snow: arrives by precipitation process
   !----------------------------------------------------------------------
+  !!!call ftrace_region_begin("line 2018")
   DO JL=KIDIA,KFDIA
     
     ZICETOT(JL)=ZQXFG(JL,NCLDQI)+ZQXFG(JL,NCLDQS)
@@ -2006,7 +2040,8 @@ DO JK=NCLDTOP,KLEV
       ZMELTMAX(JL) = MAX(ZTDMTW0*ZCONS1*ZRLDCP,0.0_JPRB)
     ENDIF
   ENDDO
-
+!! call ftrace_region_end("line 2018")
+ !!!call ftrace_region_begin("line 2044")
   ! Loop over frozen hydrometeors (ice, snow)
   DO JM=1,NCLV
    IF (IPHASE(JM) == 2) THEN
@@ -2027,10 +2062,11 @@ DO JK=NCLDTOP,KLEV
     ENDDO
    ENDIF
   ENDDO
-  
+ !! call ftrace_region_end("line 2044")
   !----------------------------------------------------------------------
   ! 4.4b  FREEZING of RAIN
   !----------------------------------------------------------------------
+ ! call ftrace_region_begin("line 2069")
   DO JL=KIDIA,KFDIA 
 
     ! If rain present
@@ -2087,10 +2123,11 @@ DO JK=NCLDTOP,KLEV
     ENDIF
 
   ENDDO
-
+  !call ftrace_region_end("line 2069")
   !----------------------------------------------------------------------
   ! 4.4c  FREEZING of LIQUID 
   !----------------------------------------------------------------------
+  !!call ftrace_region_begin("line 2130")
   DO JL=KIDIA,KFDIA 
     ! not implicit yet... 
     ZFRZMAX(JL)=MAX((RTHOMO-ZTP1(JL,JK))*ZRLDCP,0.0_JPRB)
@@ -2105,6 +2142,7 @@ DO JK=NCLDTOP,KLEV
       ZSOLQA(JL,JM,JN) = ZSOLQA(JL,JM,JN)-ZFRZ
     ENDIF
   ENDDO
+  !!call ftrace_region_end("line 2130")
 
   !----------------------------------------------------------------------
   ! 4.5   EVAPORATION OF RAIN/SNOW
@@ -2113,26 +2151,34 @@ DO JK=NCLDTOP,KLEV
   !----------------------------------------
   ! Rain evaporation scheme from Sundquist
   !----------------------------------------
+  !!!call ftrace_region_begin("line 2154")
  IF (IEVAPRAIN == 1) THEN
 
-  ! Rain
-  
+ ! Rain
+  midx = 0
   DO JL=KIDIA,KFDIA
 
-    ZZRH=RPRECRHMAX+(1.0_JPRB-RPRECRHMAX)*ZCOVPMAX(JL)/MAX(ZEPSEC,1.0_JPRB-ZA(JL,JK))
-    ZZRH=MIN(MAX(ZZRH,RPRECRHMAX),1.0_JPRB)
+    ZZRHlist(JL)=RPRECRHMAX+(1.0_JPRB-RPRECRHMAX)*ZCOVPMAX(JL)/MAX(ZEPSEC,1.0_JPRB-ZA(JL,JK))
+    ZZRHlist(JL)=MIN(MAX(ZZRHlist(JL),RPRECRHMAX),1.0_JPRB)
 
-    ZQE=(ZQX(JL,JK,NCLDQV)-ZA(JL,JK)*ZQSLIQ(JL,JK))/&
+    ZQElist(JL)=(ZQX(JL,JK,NCLDQV)-ZA(JL,JK)*ZQSLIQ(JL,JK))/&
     & MAX(ZEPSEC,1.0_JPRB-ZA(JL,JK))  
     !---------------------------------------------
     ! humidity in moistest ZCOVPCLR part of domain
     !---------------------------------------------
-    ZQE=MAX(0.0_JPRB,MIN(ZQE,ZQSLIQ(JL,JK)))
+    ZQElist(JL)=MAX(0.0_JPRB,MIN(ZQElist(JL),ZQSLIQ(JL,JK)))
     LLO1=ZCOVPCLR(JL)>ZEPSEC .AND. &
        & ZQXFG(JL,NCLDQR)>ZEPSEC .AND. &
-       & ZQE<ZZRH*ZQSLIQ(JL,JK)
+       & ZQElist(JL)<ZZRHlist(JL)*ZQSLIQ(JL,JK)
     
     IF(LLO1) THEN
+            !!midx = midx +1
+            !!!midxlist(midx) = JL
+    !!ENDIF
+ !! ENDDO
+  !!!!$NEC ivdep
+ !! Do idx=1,midx
+   !!!   JL=midxlist(idx)
       ! note: zpreclr is a rain flux
       ZPRECLR = ZQXFG(JL,NCLDQR)*ZCOVPCLR(JL)/ &
        & SIGN(MAX(ABS(ZCOVPTOT(JL)*ZDTGDP(JL)),ZEPSILON),ZCOVPTOT(JL)*ZDTGDP(JL))
@@ -2148,7 +2194,7 @@ DO JK=NCLDTOP,KLEV
       ZBETA=RG*RPECONS*0.5_JPRB*ZBETA1**0.5777_JPRB  
 
       ZDENOM  = 1.0_JPRB+ZBETA*PTSPHY*ZCORQSLIQ(JL)
-      ZDPR    = ZCOVPCLR(JL)*ZBETA*(ZQSLIQ(JL,JK)-ZQE)/ZDENOM*ZDP(JL)*ZRG_R
+      ZDPR    = ZCOVPCLR(JL)*ZBETA*(ZQSLIQ(JL,JK)-ZQElist(JL))/ZDENOM*ZDP(JL)*ZRG_R
       ZDPEVAP = ZDPR*ZDTGDP(JL)
 
       !---------------------------------------------------------
@@ -2178,12 +2224,14 @@ DO JK=NCLDTOP,KLEV
     ENDIF
   ENDDO
 
-
+ !!!call ftrace_region_end("line 2154")
+ !!!!call ftrace_region_begin("line 2228")
  !---------------------------------------------------------
  ! Rain evaporation scheme based on Abel and Boutle (2013)
  !---------------------------------------------------------
  ELSEIF (IEVAPRAIN == 2) THEN
-
+   !!!call ftrace_region_begin("line 2228")
+  nidx = 0
   DO JL=KIDIA,KFDIA
 
     !-----------------------------------------------------------------------
@@ -2191,8 +2239,8 @@ DO JK=NCLDTOP,KLEV
     ! to avoid cloud formation and saturation of the grid box
     !-----------------------------------------------------------------------
     ! Limit RH for rain evaporation dependent on precipitation fraction 
-    ZZRH=RPRECRHMAX+(1.0_JPRB-RPRECRHMAX)*ZCOVPMAX(JL)/MAX(ZEPSEC,1.0_JPRB-ZA(JL,JK))
-    ZZRH=MIN(MAX(ZZRH,RPRECRHMAX),1.0_JPRB)
+    ZZRHlist(JL)=RPRECRHMAX+(1.0_JPRB-RPRECRHMAX)*ZCOVPMAX(JL)/MAX(ZEPSEC,1.0_JPRB-ZA(JL,JK))
+    ZZRHlist(JL)=MIN(MAX(ZZRHlist(JL),RPRECRHMAX),1.0_JPRB)
 
     ! Critical relative humidity
     !ZRHC=RAMID
@@ -2204,16 +2252,22 @@ DO JK=NCLDTOP,KLEV
     !ZZRH = MIN(ZRHC,ZZRH)
 
     ! Further limit RH for rain evaporation to 80% (RHcrit in free troposphere)
-    ZZRH = MIN(0.8_JPRB,ZZRH)
+    ZZRHlist(JL) = MIN(0.8_JPRB,ZZRHlist(JL))
   
-    ZQE=MAX(0.0_JPRB,MIN(ZQX(JL,JK,NCLDQV),ZQSLIQ(JL,JK)))
+    ZQElist(JL)=MAX(0.0_JPRB,MIN(ZQX(JL,JK,NCLDQV),ZQSLIQ(JL,JK)))
 
     LLO1=ZCOVPCLR(JL)>ZEPSEC .AND. &
        & ZQXFG(JL,NCLDQR)>ZEPSEC .AND. & 
-       & ZQE<ZZRH*ZQSLIQ(JL,JK)
+       & ZQElist(JL)<ZZRHlist(JL)*ZQSLIQ(JL,JK)
 
     IF(LLO1) THEN
-
+      nidx = nidx + 1
+      nidxlist(nidx) = JL
+    ENDIF
+  ENDDO
+  !$NEC ivdep
+  DO idx=1, nidx
+     JL = nidxlist(idx)
       !-------------------------------------------
       ! Abel and Boutle (2012) evaporation
       !-------------------------------------------
@@ -2236,7 +2290,7 @@ DO JK=NCLDTOP,KLEV
       ZCORR2= (ZTP1(JL,JK)/273._JPRB)**1.5_JPRB*393._JPRB/(ZTP1(JL,JK)+120._JPRB)
       ZKA = RCL_KA273*ZCORR2
 
-      ZSUBSAT = MAX(ZZRH*ZQSLIQ(JL,JK)-ZQE,0.0_JPRB)
+      ZSUBSAT = MAX(ZZRHlist(JL)*ZQSLIQ(JL,JK)-ZQElist(JL),0.0_JPRB)
 
       ZBETA = (0.5_JPRB/ZQSLIQ(JL,JK))*ZTP1(JL,JK)**2._JPRB*ZESATLIQ* &
      & RCL_CONST1R*(ZCORR2/ZEVAP_DENOM)*(0.78_JPRB/(ZLAMBDA**RCL_CONST4R)+ &
@@ -2270,32 +2324,40 @@ DO JK=NCLDTOP,KLEV
       ! Update fg field 
       ZQXFG(JL,NCLDQR) = ZQXFG(JL,NCLDQR)-ZEVAP
     
-    ENDIF
+    !ENDIF
   ENDDO
   
 ENDIF ! on IEVAPRAIN
-
+!!!call ftrace_region_end("line 2228")
   !----------------------------------------------------------------------
   ! 4.5   EVAPORATION OF SNOW
   !----------------------------------------------------------------------
   ! Snow
  IF (IEVAPSNOW == 1) THEN
-  
+        ! call ftrace_region_begin("line 2337")
+  !sidx = 0
   DO JL=KIDIA,KFDIA
-    ZZRH=RPRECRHMAX+(1.0_JPRB-RPRECRHMAX)*ZCOVPMAX(JL)/MAX(ZEPSEC,1.0_JPRB-ZA(JL,JK))
-    ZZRH=MIN(MAX(ZZRH,RPRECRHMAX),1.0_JPRB)
-    ZQE=(ZQX(JL,JK,NCLDQV)-ZA(JL,JK)*ZQSICE(JL,JK))/&
+    ZZRHlist(JL)=RPRECRHMAX+(1.0_JPRB-RPRECRHMAX)*ZCOVPMAX(JL)/MAX(ZEPSEC,1.0_JPRB-ZA(JL,JK))
+    ZZRHlist(JL)=MIN(MAX(ZZRHlist(JL),RPRECRHMAX),1.0_JPRB)
+    ZQElist(JL)=(ZQX(JL,JK,NCLDQV)-ZA(JL,JK)*ZQSICE(JL,JK))/&
     & MAX(ZEPSEC,1.0_JPRB-ZA(JL,JK))  
 
     !---------------------------------------------
     ! humidity in moistest ZCOVPCLR part of domain
     !---------------------------------------------
-    ZQE=MAX(0.0_JPRB,MIN(ZQE,ZQSICE(JL,JK)))
+    ZQElist(JL)=MAX(0.0_JPRB,MIN(ZQElist(JL),ZQSICE(JL,JK)))
     LLO1=ZCOVPCLR(JL)>ZEPSEC .AND. &
        & ZQXFG(JL,NCLDQS)>ZEPSEC .AND. &
-       & ZQE<ZZRH*ZQSICE(JL,JK)
+       & ZQElist(JL)<ZZRHlist(JL)*ZQSICE(JL,JK)
 
     IF(LLO1) THEN
+   !   sidx = sidx + 1
+    !  sidxlist(sidx) = JL
+    !ENDIF
+  !ENDDO
+  !!!!!!$NEC ivdep
+ ! DO idx=1,sidx
+  !    JL = sidxlist(idx)
       ! note: zpreclr is a rain flux a
       ZPRECLR=ZQXFG(JL,NCLDQS)*ZCOVPCLR(JL)/ &
        & SIGN(MAX(ABS(ZCOVPTOT(JL)*ZDTGDP(JL)),ZEPSILON),ZCOVPTOT(JL)*ZDTGDP(JL))
@@ -2311,7 +2373,7 @@ ENDIF ! on IEVAPRAIN
       ZBETA=RG*RPECONS*(ZBETA1)**0.5777_JPRB  
 
       ZDENOM=1.0_JPRB+ZBETA*PTSPHY*ZCORQSICE(JL)
-      ZDPR = ZCOVPCLR(JL)*ZBETA*(ZQSICE(JL,JK)-ZQE)/ZDENOM*ZDP(JL)*ZRG_R
+      ZDPR = ZCOVPCLR(JL)*ZBETA*(ZQSICE(JL,JK)-ZQElist(JL))/ZDENOM*ZDP(JL)*ZRG_R
       ZDPEVAP=ZDPR*ZDTGDP(JL)
 
       !---------------------------------------------------------
@@ -2340,10 +2402,12 @@ ENDIF ! on IEVAPRAIN
 
     ENDIF
   ENDDO
+  !call ftrace_region_end("line 2337")
+
   !---------------------------------------------------------
   ELSEIF (IEVAPSNOW == 2) THEN
 
- 
+    
    DO JL=KIDIA,KFDIA
 
     !-----------------------------------------------------------------------
@@ -2418,6 +2482,8 @@ ENDIF ! on IEVAPSNOW
   !--------------------------------------
   ! Evaporate small precipitation amounts
   !--------------------------------------
+ !call ftrace_region_begin("line 2481")
+
   DO JM=1,NCLV
    IF (LLFALL(JM)) THEN 
     DO JL=KIDIA,KFDIA
@@ -2428,6 +2494,8 @@ ENDIF ! on IEVAPSNOW
     ENDDO
    ENDIF
   ENDDO
+ !  call ftrace_region_end("line 2481")
+
   
   !######################################################################
   !            5.0  *** SOLVERS FOR A AND L ***
@@ -2438,6 +2506,7 @@ ENDIF ! on IEVAPSNOW
   !---------------------------
   ! 5.1 solver for cloud cover
   !---------------------------
+   !call ftrace_region_begin("line 2505")
   DO JL=KIDIA,KFDIA
     ZANEW=(ZA(JL,JK)+ZSOLAC(JL))/(1.0_JPRB+ZSOLAB(JL))
     ZANEW=MIN(ZANEW,1.0_JPRB)
@@ -2448,6 +2517,7 @@ ENDIF ! on IEVAPSNOW
     !---------------------------------
     ZANEWM1(JL)=ZANEW
   ENDDO
+  ! call ftrace_region_end("line 2505")
 
   !--------------------------------
   ! 5.2 solver for the microphysics
@@ -2458,7 +2528,7 @@ ENDIF ! on IEVAPSNOW
   ! Note: Species are treated in the order in which they run out
   ! since the clipping will alter the balance for the other vars
   !--------------------------------------------------------------
-
+! call ftrace_region_begin("line 2531")
   DO JM=1,NCLV
     DO JN=1,NCLV
       DO JL=KIDIA,KFDIA
@@ -2491,93 +2561,146 @@ ENDIF ! on IEVAPSNOW
       ZRATIO(JL,JM)=ZMAX/ZRAT
     ENDDO
   ENDDO
+ ! call ftrace_region_end("line 2531")
+  !call ftrace_region_begin("hot-spot")
+  !call ftrace_region_begin("line 2565")
   !--------------------------------------------------------
-  ! now sort zratio to find out which species run out first
+  ! now sort zratio to find out which species run out first     **** this loop is removed for optimisation!
   !--------------------------------------------------------
-  DO JM=1,NCLV
-    DO JL=KIDIA,KFDIA
-      IORDER(JL,JM)=-999
-    ENDDO
-  ENDDO
-  DO JN=1,NCLV
-    DO JL=KIDIA,KFDIA
-      LLINDEX1(JL,JN)=.TRUE.
-    ENDDO
-  ENDDO
-  DO JM=1,NCLV
-    DO JL=KIDIA,KFDIA
-      ZMIN(JL)=1.E32_JPRB
-    ENDDO
-    DO JN=1,NCLV
-      DO JL=KIDIA,KFDIA
-        IF (LLINDEX1(JL,JN) .AND. ZRATIO(JL,JN)<ZMIN(JL)) THEN
-          IORDER(JL,JM)=JN
-          ZMIN(JL)=ZRATIO(JL,JN)
-        ENDIF
-      ENDDO
-    ENDDO
-    DO JL=KIDIA,KFDIA
-      LLINDEX1(JL,IORDER(JL,JM))=.FALSE. ! marked as searched
-    ENDDO
-  ENDDO
+  !!DO JM=1,NCLV
+    !!DO JL=KIDIA,KFDIA
+      !!IORDER(JL,JM)=-999
+    !!ENDDO
+ !! ENDDO
+!!  DO JN=1,NCLV
+  !!  DO JL=KIDIA,KFDIA
+    !!  LLINDEX1(JL,JN)=.TRUE.
+    !!ENDDO
+  !!ENDDO
+ !! DO JM=1,NCLV
+   !! DO JL=KIDIA,KFDIA
+     !! ZMIN(JL)=1.E32_JPRB
+    !!ENDDO
+   !! DO JN=1,NCLV
+     !! DO JL=KIDIA,KFDIA
+       !! IF (LLINDEX1(JL,JN) .AND. ZRATIO(JL,JN)<ZMIN(JL)) THEN
+         !! IORDER(JL,JM)=JN
+        !!  ZMIN(JL)=ZRATIO(JL,JN)
+       !! ENDIF
+      !!ENDDO
+    !!ENDDO
+   !! DO JL=KIDIA,KFDIA
+     !! LLINDEX1(JL,IORDER(JL,JM))=.FALSE. ! marked as searched
+    !!ENDDO
+  !!ENDDO
+  !call ftrace_region_end("line 2565")
 
   !--------------------------------------------
   ! scale the sink terms, in the correct order, 
   ! recalculating the scale factor each time
   !--------------------------------------------
-  DO JM=1,NCLV
+!call ftrace_region_begin("line 2600")
+
+   DO JM=1,NCLV
     DO JL=KIDIA,KFDIA
       ZSINKSUM(JL,JM)=0.0_JPRB
     ENDDO
-  ENDDO
+   ENDDO
 
   !----------------
   ! recalculate sum
   !----------------
-  DO JM=1,NCLV
-!   DO JN=1,NCLV
+  Do JM=1,NCLV
     DO JL=KIDIA,KFDIA
-      JO=IORDER(JL,JM)
-!     ZZSUM=ZSINKSUM(JL,JO)
-!DIR$ IVDEP
-!DIR$ PREFERVECTOR
-      DO JN=1,NCLV
-        LLINDEX3(JL,JO,JN)=ZSOLQA(JL,JO,JN)<0.0_JPRB
-!       ZSINKSUM(JL,JO)=ZSINKSUM(JL,JO)-ZSOLQA(JL,JO,JN)
-!       ZZSUM=ZZSUM-ZSOLQA(JL,JO,JN)
-      ENDDO
-      ZSINKSUM(JL,JO)=ZSINKSUM(JL,JO)-SUM(ZSOLQA(JL,JO,1:NCLV))
+      ZSINKSUM(JL,JM)=ZSINKSUM(JL,JM)-SUM(ZSOLQA(JL,JM,1:NCLV))
     ENDDO
-    !---------------------------
-    ! recalculate scaling factor
-    !---------------------------
+  !---------------------------
+  ! recalculate scaling factor
+  !---------------------------
+   DO JL=KIDIA,KFDIA
+     ZMM=MAX(ZQX(JL,Jk,JM),ZEPSEC)
+     ZRR=MAX(ZSINKSUM(JL,JM),ZMM)
+     ZRATIO(JL,JM)=ZMM/ZRR
+     ENDDO
+   !------
+   ! scale
+   !------
     DO JL=KIDIA,KFDIA
-      JO=IORDER(JL,JM)
-      ZMM=MAX(ZQX(JL,JK,JO),ZEPSEC)
-      ZRR=MAX(ZSINKSUM(JL,JO),ZMM)
-      ZRATIO(JL,JO)=ZMM/ZRR
-    ENDDO
-    !------
-    ! scale
-    !------
-    DO JL=KIDIA,KFDIA
-      JO=IORDER(JL,JM)
-      ZZRATIO=ZRATIO(JL,JO)
-!DIR$ IVDEP
-!DIR$ PREFERVECTOR
+      ZZRATIO=ZRATIO(JL,JM)
       DO JN=1,NCLV
-        IF (LLINDEX3(JL,JO,JN)) THEN
-          ZSOLQA(JL,JO,JN)=ZSOLQA(JL,JO,JN)*ZZRATIO
-          ZSOLQA(JL,JN,JO)=ZSOLQA(JL,JN,JO)*ZZRATIO
+        IF(ZSOLQA(JL,JM,JN)<0.0_JPRB) THEN
+           ZSOLQA(JL,JM,JN)=ZSOLQA(JL,JM,JN)*ZZRATIO
+           ZSOLQA(JL,JN,JM)=ZSOLQA(JL,JN,JM)*ZZRATIO
         ENDIF
       ENDDO
     ENDDO
   ENDDO
+ !call ftrace_region_end("line 2600")
+
+ ! call ftrace_region_begin("line 2600")
+!!!  DO JM=1,NCLV
+   !! DO JL=KIDIA,KFDIA
+     !! ZSINKSUM(JL,JM)=0.0_JPRB
+  !!  ENDDO
+ !!! ENDDO
+
+  !----------------
+  ! recalculate sum
+  !----------------
+ !!! DO JM=1,NCLV
+!   DO JN=1,NCLV
+   ! call ftrace_region_begin("line 2612")
+    !!!DO JL=KIDIA,KFDIA
+    !!!  JO=IORDER(JL,JM)
+!     ZZSUM=ZSINKSUM(JL,JO)
+  !$NEC ivdep
+!DIR$ IVDEP
+!DIR$ PREFERVECTOR
+      !!!DO JN=1,NCLV
+      !!!  LLINDEX3(JL,JO,JN)=ZSOLQA(JL,JO,JN)<0.0_JPRB
+!       ZSINKSUM(JL,JO)=ZSINKSUM(JL,JO)-ZSOLQA(JL,JO,JN)
+!       ZZSUM=ZZSUM-ZSOLQA(JL,JO,JN)
+     !!! ENDDO
+     !!!! ZSINKSUM(JL,JO)=ZSINKSUM(JL,JO)-SUM(ZSOLQA(JL,JO,1:NCLV))
+   !! ENDDO
+    !call ftrace_region_end("line 2612")
+    !---------------------------
+    ! recalculate scaling factor
+    !---------------------------
+    !call ftrace_region_begin("line 2637")
+  !!  DO JL=KIDIA,KFDIA
+    !!  JO=IORDER(JL,JM)
+      !!ZMM=MAX(ZQX(JL,JK,JO),ZEPSEC)
+    !!  ZRR=MAX(ZSINKSUM(JL,JO),ZMM)
+     !! ZRATIO(JL,JO)=ZMM/ZRR
+   !! ENDDO
+    !call ftrace_region_end("line 2637")
+    !------
+    ! scale
+    !------
+    !call ftrace_region_begin("line 2641")
+  !!  DO JL=KIDIA,KFDIA
+    !!  JO=IORDER(JL,JM)
+      !!ZZRATIO=ZRATIO(JL,JO)
+      !$NEC ivdep
+!DIR$ IVDEP
+!DIR$ PREFERVECTOR
+     !! DO JN=1,NCLV
+       !! IF (LLINDEX3(JL,JO,JN)) THEN
+         !! ZSOLQA(JL,JO,JN)=ZSOLQA(JL,JO,JN)*ZZRATIO
+        !!  ZSOLQA(JL,JN,JO)=ZSOLQA(JL,JN,JO)*ZZRATIO
+       !! ENDIF
+     !! ENDDO
+   !! ENDDO
+   ! call ftrace_region_end("line 2641")
+ !! ENDDO
+  !call ftrace_region_end("line 2600")
+ !call ftrace_region_end("hot-spot")
 
   !--------------------------------------------------------------
   ! 5.2.2 Solver
   !------------------------
-
+  ! call ftrace_region_begin("line 2647")
   !------------------------
   ! set the LHS of equation  
   !------------------------
@@ -2603,10 +2726,11 @@ ENDIF ! on IEVAPSNOW
       ENDIF    
     ENDDO
   ENDDO
-
+  !call ftrace_region_end("line 2647")
   !------------------------
   ! set the RHS of equation  
   !------------------------
+  !  call ftrace_region_begin("line 2677")
   DO JM=1,NCLV
     DO JL=KIDIA,KFDIA
       !---------------------------------
@@ -2619,7 +2743,7 @@ ENDIF ! on IEVAPSNOW
       ZQXN(JL,JM)=ZQX(JL,JK,JM)+ZEXPLICIT
     ENDDO
   ENDDO
-
+ !  call ftrace_region_end("line 2677")
   !-----------------------------------
   ! *** solve by LU decomposition: ***
   !-----------------------------------
@@ -2632,6 +2756,7 @@ ENDIF ! on IEVAPSNOW
   !       modifications.
 
   ! Non pivoting recursive factorization 
+  !call ftrace_region_begin("line 2707")
   DO JN = 1, NCLV-1  ! number of steps
     DO JM = JN+1,NCLV ! row index
       ZQLHS(KIDIA:KFDIA,JM,JN)=ZQLHS(KIDIA:KFDIA,JM,JN) &
@@ -2643,6 +2768,7 @@ ENDIF ! on IEVAPSNOW
       ENDDO
     ENDDO
   ENDDO        
+  
 
   ! Backsubstitution 
   !  step 1 
@@ -2661,7 +2787,6 @@ ENDIF ! on IEVAPSNOW
     ENDDO
     ZQXN(KIDIA:KFDIA,JN)=ZQXN(KIDIA:KFDIA,JN)/ZQLHS(KIDIA:KFDIA,JN,JN)
   ENDDO
-
   ! Ensure no small values (including negatives) remain in cloud variables nor
   ! precipitation rates.
   ! Evaporate l,i,r,s to water vapour. Latent heating taken into account below
@@ -2673,10 +2798,12 @@ ENDIF ! on IEVAPSNOW
       ENDIF
     ENDDO
   ENDDO
+ ! call ftrace_region_end("line 2707")
 
   !--------------------------------
   ! variables needed for next level
   !--------------------------------
+   ! call ftrace_region_begin("line 2750")
   DO JM=1,NCLV
     DO JL=KIDIA,KFDIA
       ZQXNM1(JL,JM)    = ZQXN(JL,JM)
@@ -2705,6 +2832,8 @@ ENDIF ! on IEVAPSNOW
       ZCOVPTOT(JL)=0.0_JPRB
     ENDIF
   ENDDO
+ ! call ftrace_region_end("line 2750")
+
   
   !######################################################################
   !              6  *** UPDATE TENDANCIES ***
@@ -2713,7 +2842,7 @@ ENDIF ! on IEVAPSNOW
   !--------------------------------
   ! 6.1 Temperature and CLV budgets 
   !--------------------------------
-
+ !  call ftrace_region_begin("line 2789")
   DO JM=1,NCLV-1
     DO JL=KIDIA,KFDIA
 
@@ -2766,8 +2895,10 @@ ENDIF ! on IEVAPSNOW
   DO JL=KIDIA,KFDIA
     PCOVPTOT(JL,JK) = ZCOVPTOT(JL)
   ENDDO
- 
+!call ftrace_region_end("line 2789") 
 ENDDO ! on vertical level JK
+
+
 !----------------------------------------------------------------------
 !                       END OF VERTICAL LOOP
 !----------------------------------------------------------------------
@@ -2780,6 +2911,7 @@ ENDDO ! on vertical level JK
 ! Copy general precip arrays back into PFP arrays for GRIB archiving
 ! Add rain and liquid fluxes, ice and snow fluxes
 !--------------------------------------------------------------------
+ !  call ftrace_region_begin("line 2858")
 DO JK=1,KLEV+1
   DO JL=KIDIA,KFDIA
     PFPLSL(JL,JK) = ZPFPLSX(JL,JK,NCLDQR)+ZPFPLSX(JL,JK,NCLDQL)
@@ -2850,16 +2982,19 @@ DO JK=1,KLEV
     PFCQSNG(JL,JK+1)=PFCQSNG(JL,JK+1)+ZLNEG(JL,JK,NCLDQS)*ZGDPH_R
   ENDDO
 ENDDO
-
+  ! call ftrace_region_end("line 2858")
 !-----------------------------------
 ! enthalpy flux due to precipitation
 !-----------------------------------
+   !call ftrace_region_begin("line 2933")
 DO JK=1,KLEV+1
   DO JL=KIDIA,KFDIA
     PFHPSL(JL,JK) = -RLVTT*PFPLSL(JL,JK)
     PFHPSN(JL,JK) = -RLSTT*PFPLSN(JL,JK)
   ENDDO
 ENDDO
+  ! call ftrace_region_end("line 2933")
+  
 
 !===============================================================================
 END ASSOCIATE
